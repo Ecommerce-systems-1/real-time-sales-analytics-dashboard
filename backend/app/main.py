@@ -30,13 +30,21 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Real-Time Sales Analytics", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 @app.websocket("/ws/stream")
 async def ws_stream(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         await websocket.send_json(agg.snapshot())
         while True:
-            await websocket.receive_text()  # keep alive; browser may send pings
+            try:
+                # HF's proxy drops idle WebSockets; ping every 25s to keep alive
+                await asyncio.wait_for(websocket.receive_text(), timeout=25)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"event": "ping"})
     except WebSocketDisconnect:
         await manager.disconnect(websocket)
     except Exception:
@@ -51,6 +59,6 @@ def get_recent_events():
     from app.database import get_recent_raw_events
     return get_recent_raw_events(100)
 
-static_dir = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "out")
+static_dir = "/app/frontend/out"
 if os.path.exists(static_dir):
     app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
